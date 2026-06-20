@@ -1,48 +1,48 @@
 /*
  * File: imu_app.c
  * Brief:
- *   IMU application layer ported from a generic MPU6050+compass backend
- *   to the BMX055 driver (bmx055_iic.c/.h) on ESP32 / FreeRTOS.
+ * IMU application layer ported from a generic MPU6050+compass backend
+ * to the BMX055 driver (bmx055_iic.c/.h) on ESP32 / FreeRTOS.
  *
- *   This file combines what used to be three source files (imu_app.c,
- *   imu_filter.c, imu_math.c-as-header-inlines) into one: the Butterworth
- *   filter implementation now lives directly below, since it exists only
- *   to support this module's fusion pipeline.
+ * This file combines what used to be three source files (imu_app.c,
+ * imu_filter.c, imu_math.c-as-header-inlines) into one: the Butterworth
+ * filter implementation now lives directly below, since it exists only
+ * to support this module's fusion pipeline.
  *
- *   The update flow is unchanged from the original:
- *   1) read raw sensor data (now from BMX055, in raw counts),
- *   2) remove offsets,
- *   3) low-pass filter gyro/accel,
- *   4) run Madgwick AHRS,
- *   5) export Euler angles (pitch / roll / yaw).
+ * The update flow is unchanged from the original:
+ * 1) read raw sensor data (now from BMX055, in raw counts),
+ * 2) remove offsets,
+ * 3) low-pass filter gyro/accel,
+ * 4) run Madgwick AHRS,
+ * 5) export Euler angles (pitch / roll / yaw).
  *
  * Porting notes (what changed vs. the original):
- *   - MPU6050_Read(&gyro, &accel, &temp) -> BMX055_ReadGyroRaw() +
- *     BMX055_ReadAccelRaw(), since accel/gyro live on separate BMX055
- *     I2C addresses. Temperature isn't exposed by the BMX055 driver,
- *     so s_imu.temperature_deg is left at 0.
- *   - Compass_Read(&mag) -> BMX055_ReadMagRaw().
- *   - IMU_Platform_Init()/IMU_I2C1_Init()/IMU_I2C0_Init() -> a single
- *     i2c_master_init(), since all three BMX055 dies share one I2C bus
- *     in bmx055_iic.c.
- *   - IMU_DelayMs()/IMU_Micros() -> FreeRTOS vTaskDelay()/esp_timer.
- *   - Everything else (calibration, filtering, Madgwick fusion math,
- *     Euler conversion) is identical to the original.
+ * - MPU6050_Read(&gyro, &accel, &temp) -> BMX055_ReadGyroRaw() +
+ * BMX055_ReadAccelRaw(), since accel/gyro live on separate BMX055
+ * I2C addresses. Temperature isn't exposed by the BMX055 driver,
+ * so s_imu.temperature_deg is left at 0.
+ * - Compass_Read(&mag) -> BMX055_ReadMagRaw().
+ * - IMU_Platform_Init()/IMU_I2C1_Init()/IMU_I2C0_Init() -> a single
+ * i2c_master_init(), since all three BMX055 dies share one I2C bus
+ * in bmx055_iic.c.
+ * - IMU_DelayMs()/IMU_Micros() -> FreeRTOS vTaskDelay()/esp_timer.
+ * - Everything else (calibration, filtering, Madgwick fusion math,
+ * Euler conversion) is identical to the original.
  *
  * Function index:
- *   1. IMU_FilterSetCutoff()    - Compute Butterworth biquad coefficients.
- *   2. IMU_FilterApply()        - Apply one filter sample.
- *   3. IMU_App_CalibrateGyro()  - Estimate gyro zero bias while the board is still.
- *   4. IMU_App_ResetAttitude()  - Build the initial quaternion from accel + mag.
- *   5. IMU_App_UpdateDt()       - Refresh the loop delta time.
- *   6. IMU_App_UpdateSensors()  - Read and pre-process all sensor channels.
- *   7. IMU_App_MadgwickUpdate() - Run the AHRS fusion step.
- *   8. IMU_App_UpdateEuler()    - Convert quaternion to pitch/roll/yaw.
- *   9. IMU_App_Init()           - Initialize the whole IMU app.
- *  10. IMU_App_Update()         - Execute one update cycle.
- *  11. IMU_App_GetState()       - Return the latest state snapshot.
- *  12. IMU_App_GetPitch/Roll/Yaw() - Convenience scalar getters.
- *  13. IMU_App_StartTask()      - FreeRTOS task: update + periodic log.
+ * 1. IMU_FilterSetCutoff()    - Compute Butterworth biquad coefficients.
+ * 2. IMU_FilterApply()        - Apply one filter sample.
+ * 3. IMU_App_CalibrateGyro()  - Estimate gyro zero bias while the board is still.
+ * 4. IMU_App_ResetAttitude()  - Build the initial quaternion from accel + mag.
+ * 5. IMU_App_UpdateDt()       - Refresh the loop delta time.
+ * 6. IMU_App_UpdateSensors()  - Read and pre-process all sensor channels.
+ * 7. IMU_App_MadgwickUpdate() - Run the AHRS fusion step.
+ * 8. IMU_App_UpdateEuler()    - Convert quaternion to pitch/roll/yaw.
+ * 9. IMU_App_Init()           - Initialize the whole IMU app.
+ * 10. IMU_App_Update()         - Execute one update cycle.
+ * 11. IMU_App_GetState()       - Return the latest state snapshot.
+ * 12. IMU_App_GetPitch/Roll/Yaw() - Convenience scalar getters.
+ * 13. IMU_App_StartTask()      - FreeRTOS task: update + periodic log.
  */
 
 #include <math.h>
@@ -56,13 +56,18 @@
 #include "imu_app.h"
 #include "bmx_055.h"
 
+/* Set to 1 only after implementing BMM150 hard-iron calibration.
+ * Uncalibrated Mag data will cause continuous Yaw spinning in 9-DOF. */
+#define IMU_USE_MAGNETOMETER   0
+
 /* Avoid relying on the non-standard M_PI macro (not guaranteed by C99
  * without platform-specific feature-test macros). */
 #define IMU_FILTER_PI 3.14159265358979323846f
 
 #define IMU_SAMPLE_HZ          200.0f
 #define IMU_DEFAULT_DT         (1.0f / IMU_SAMPLE_HZ)
-#define GYRO_CALIBRATION_COFF  0.0152672f
+/* 1 / 16.384 LSB/deg/s for BMX055 initialized to +/- 2000 deg/s range */
+#define GYRO_CALIBRATION_COFF  0.061035f
 
 static const char *TAG = "IMU_APP";
 
@@ -72,10 +77,10 @@ static IMU_ButterParam s_gyro_param;
 static IMU_ButterBuffer s_accel_buf[3];
 static IMU_ButterBuffer s_gyro_buf[3];
 static uint32_t s_last_update_us = 0;
-static float s_beta = 0.01f;
+static float s_beta = 0.05f;
 
 /* ------------------------------------------------------------------------ */
-/* 1-2. Butterworth low-pass filter (formerly imu_filter.c)                  */
+/* 1-2. Butterworth low-pass filter (formerly imu_filter.c)                 */
 /* ------------------------------------------------------------------------ */
 
 void IMU_FilterSetCutoff(float sample_hz, float cutoff_hz, IMU_ButterParam *param)
@@ -139,12 +144,14 @@ static void IMU_ReadAccelGyro(IMU_Vector3f *gyro, IMU_Vector3f *accel)
         ax = ay = az = 0;
     }
 
-    gyro->x = (float)gx;
-    gyro->y = (float)gy;
+    /* Math Frame: X = Phys Y, Y = -Phys X, Z = Phys Z
+     * Swaps Pitch/Roll, maintains Right-Hand Rule, keeps +1g Z upward. */
+    gyro->x = (float)gy;
+    gyro->y = -(float)gx;
     gyro->z = (float)gz;
 
-    accel->x = (float)ax;
-    accel->y = (float)ay;
+    accel->x = (float)ay;
+    accel->y = -(float)ax;
     accel->z = (float)az;
 }
 
@@ -157,13 +164,18 @@ static void IMU_ReadMag(IMU_Vector3f *mag)
         mx = my = mz = 0;
     }
 
-    mag->x = (float)mx;
-    mag->y = (float)my;
-    mag->z = (float)mz;
+    /* BMX055 Mag alignment relative to Accel frame: X = A_X, Y = -A_Y, Z = -A_Z.
+     * Applying Math Frame mapping (Math X = A_Y, Math Y = -A_X, Math Z = A_Z):
+     * Math X = -my
+     * Math Y = -mx
+     * Math Z = -mz */
+    mag->x = -(float)my;
+    mag->y = -(float)mx;
+    mag->z = -(float)mz;
 }
 
 /* ------------------------------------------------------------------------ */
-/* 1. Gyro bias calibration                                                  */
+/* 1. Gyro bias calibration                                                 */
 /* ------------------------------------------------------------------------ */
 
 static void IMU_App_CalibrateGyro(void)
@@ -198,17 +210,11 @@ static void IMU_App_ResetAttitude(void)
 {
     float roll_obs;
     float pitch_obs;
-    float yaw_obs;
+    float yaw_obs = 0.0f;
     float ax;
     float ay;
     float az;
     IMU_Vector3f mag;
-    float sin_pitch;
-    float cos_pitch;
-    float sin_roll;
-    float cos_roll;
-    float mxn;
-    float myn;
 
     /* Use one fresh sensor snapshot to build the initial orientation estimate. */
     IMU_ReadAccelGyro(&s_imu.gyro_raw, &s_imu.accel_raw);
@@ -223,10 +229,13 @@ static void IMU_App_ResetAttitude(void)
     roll_obs = -57.3f * atanf(ax * IMU_InvSqrt(ay * ay + az * az));
     pitch_obs = 57.3f * atanf(ay * IMU_InvSqrt(ax * ax + az * az));
 
-    sin_pitch = sinf(pitch_obs * IMU_DEG2RAD);
-    cos_pitch = cosf(pitch_obs * IMU_DEG2RAD);
-    sin_roll = sinf(roll_obs * IMU_DEG2RAD);
-    cos_roll = cosf(roll_obs * IMU_DEG2RAD);
+#if IMU_USE_MAGNETOMETER
+    float sin_pitch = sinf(pitch_obs * IMU_DEG2RAD);
+    float cos_pitch = cosf(pitch_obs * IMU_DEG2RAD);
+    float sin_roll = sinf(roll_obs * IMU_DEG2RAD);
+    float cos_roll = cosf(roll_obs * IMU_DEG2RAD);
+    float mxn;
+    float myn;
 
     /* Tilt-compensate the magnetic vector before computing yaw. */
     mxn = (mag.x - s_imu.mag_offset.x) * cos_roll + (mag.z - s_imu.mag_offset.z) * sin_roll;
@@ -234,6 +243,7 @@ static void IMU_App_ResetAttitude(void)
         + (mag.y - s_imu.mag_offset.y) * cos_pitch
         - (mag.z - s_imu.mag_offset.z) * sin_pitch * cos_roll;
     yaw_obs = atan2f(mxn, myn) * 57.296f;
+#endif
 
     {
         float pitch = roll_obs * IMU_DEG2RAD;
@@ -253,7 +263,7 @@ static void IMU_App_ResetAttitude(void)
 }
 
 /* ------------------------------------------------------------------------ */
-/* 3. Loop timing                                                            */
+/* 3. Loop timing                                                           */
 /* ------------------------------------------------------------------------ */
 
 static void IMU_App_UpdateDt(void)
@@ -263,10 +273,12 @@ static void IMU_App_UpdateDt(void)
     if (s_last_update_us == 0U) {
         s_imu.dt_s = IMU_DEFAULT_DT;
     } else {
-        /* Convert microsecond timestamp spacing into seconds for fusion. */
+        /* Trust the hardware timer exactly. Remove artificial bounds clamping
+         * that multiplies integration errors during scheduler jitter. */
         s_imu.dt_s = (float)(now_us - s_last_update_us) / 1000000.0f;
-        /* Clamp abnormal timing so one scheduler hiccup does not destabilize AHRS. */
-        if (s_imu.dt_s < IMU_DEFAULT_DT || s_imu.dt_s > (2.0f * IMU_DEFAULT_DT) || isnan(s_imu.dt_s)) {
+        
+        /* Only filter mathematically destructive states. */
+        if (s_imu.dt_s <= 0.0f || isnan(s_imu.dt_s)) {
             s_imu.dt_s = IMU_DEFAULT_DT;
         }
     }
@@ -275,7 +287,7 @@ static void IMU_App_UpdateDt(void)
 }
 
 /* ------------------------------------------------------------------------ */
-/* 4. Sensor read + pre-processing                                           */
+/* 4. Sensor read + pre-processing                                          */
 /* ------------------------------------------------------------------------ */
 
 static void IMU_App_UpdateSensors(void)
@@ -312,7 +324,7 @@ static void IMU_App_UpdateSensors(void)
 }
 
 /* ------------------------------------------------------------------------ */
-/* 5. Madgwick AHRS fusion                                                   */
+/* 5. Madgwick AHRS fusion                                                  */
 /* ------------------------------------------------------------------------ */
 
 static void IMU_App_MadgwickUpdate(void)
@@ -324,20 +336,7 @@ static void IMU_App_MadgwickUpdate(void)
     float ax = s_imu.accel_filtered.x;
     float ay = s_imu.accel_filtered.y;
     float az = s_imu.accel_filtered.z;
-    float mx = s_imu.mag_filtered.x;
-    float my = s_imu.mag_filtered.y;
-    float mz = s_imu.mag_filtered.z;
     float recip_norm;
-    float hx;
-    float hy;
-    float bx;
-    float bz;
-    float halfwx;
-    float halfwy;
-    float halfwz;
-    float halfex;
-    float halfey;
-    float halfez;
     float q0 = s_imu.quat.w;
     float q1 = s_imu.quat.x;
     float q2 = s_imu.quat.y;
@@ -350,16 +349,16 @@ static void IMU_App_MadgwickUpdate(void)
     float s1;
     float s2;
     float s3;
-    float q0q0;
-    float q0q1;
-    float q0q2;
-    float q0q3;
-    float q1q1;
-    float q1q2;
-    float q1q3;
-    float q2q2;
-    float q2q3;
-    float q3q3;
+    float q0q0 = q0 * q0;
+    float q0q1 = q0 * q1;
+    float q0q2 = q0 * q2;
+    float q0q3 = q0 * q3;
+    float q1q1 = q1 * q1;
+    float q1q2 = q1 * q2;
+    float q1q3 = q1 * q3;
+    float q2q2 = q2 * q2;
+    float q2q3 = q2 * q3;
+    float q3q3 = q3 * q3;
 
     /* Quaternion derivative from gyro integration only. */
     q_dot1 = 0.5f * (-q1 * gx - q2 * gy - q3 * gz) * IMU_DEG2RAD;
@@ -367,37 +366,29 @@ static void IMU_App_MadgwickUpdate(void)
     q_dot3 = 0.5f * ( q0 * gy - q1 * gz + q3 * gx) * IMU_DEG2RAD;
     q_dot4 = 0.5f * ( q0 * gz + q1 * gy - q2 * gx) * IMU_DEG2RAD;
 
+#if IMU_USE_MAGNETOMETER
+    float mx = s_imu.mag_filtered.x;
+    float my = s_imu.mag_filtered.y;
+    float mz = s_imu.mag_filtered.z;
+    float hx, hy, bx, bz;
+    float halfwx, halfwy, halfwz, halfex, halfey, halfez;
+
     if (!((ax == 0.0f) && (ay == 0.0f) && (az == 0.0f))) {
-        /* Normalize accelerometer to use only its direction, not its magnitude. */
         recip_norm = IMU_InvSqrt(ax * ax + ay * ay + az * az);
         ax *= recip_norm;
         ay *= recip_norm;
         az *= recip_norm;
 
-        /* Normalize magnetometer for the same reason. */
         recip_norm = IMU_InvSqrt(mx * mx + my * my + mz * mz);
         mx *= recip_norm;
         my *= recip_norm;
         mz *= recip_norm;
 
-        q0q0 = q0 * q0;
-        q0q1 = q0 * q1;
-        q0q2 = q0 * q2;
-        q0q3 = q0 * q3;
-        q1q1 = q1 * q1;
-        q1q2 = q1 * q2;
-        q1q3 = q1 * q3;
-        q2q2 = q2 * q2;
-        q2q3 = q2 * q3;
-        q3q3 = q3 * q3;
-
-        /* Estimate Earth magnetic field direction in the current attitude frame. */
         hx = 2.0f * (mx * (0.5f - q2q2 - q3q3) + my * (q1q2 - q0q3) + mz * (q1q3 + q0q2));
         hy = 2.0f * (mx * (q1q2 + q0q3) + my * (0.5f - q1q1 - q3q3) + mz * (q2q3 - q0q1));
         bx = sqrtf(hx * hx + hy * hy);
         bz = 2.0f * (mx * (q1q3 - q0q2) + my * (q2q3 + q0q1) + mz * (0.5f - q1q1 - q2q2));
 
-        /* Cross-product style error between estimated and measured field directions. */
         halfwx = bx * (0.5f - q2q2 - q3q3) + bz * (q1q3 - q0q2);
         halfwy = bx * (q1q2 - q0q3) + bz * (q0q1 + q2q3);
         halfwz = bx * (q0q2 + q1q3) + bz * (0.5f - q1q1 - q2q2);
@@ -405,28 +396,51 @@ static void IMU_App_MadgwickUpdate(void)
         halfey = (mz * halfwx - mx * halfwz);
         halfez = (mx * halfwy - my * halfwx);
 
-        /* Gradient descent correction term from accelerometer alignment. */
         s0 = 4.0f * q0 * q2q2 + 2.0f * q2 * ax + 4.0f * q0 * q1q1 - 2.0f * q1 * ay;
         s1 = 4.0f * q1 * q3q3 - 2.0f * q3 * ax + 4.0f * q0q0 * q1 - 2.0f * q0 * ay - 4.0f * q1 + 8.0f * q1 * q1q1 + 8.0f * q1 * q2q2 + 4.0f * q1 * az;
         s2 = 4.0f * q0q0 * q2 + 2.0f * q0 * ax + 4.0f * q2 * q3q3 - 2.0f * q3 * ay - 4.0f * q2 + 8.0f * q2 * q1q1 + 8.0f * q2 * q2q2 + 4.0f * q2 * az;
         s3 = 4.0f * q1q1 * q3 - 2.0f * q1 * ax + 4.0f * q2q2 * q3 - 2.0f * q2 * ay;
 
-        /* Normalize the correction vector before applying beta gain. */
         recip_norm = IMU_InvSqrt(s0 * s0 + s1 * s1 + s2 * s2 + s3 * s3);
         s0 *= recip_norm;
         s1 *= recip_norm;
         s2 *= recip_norm;
         s3 *= recip_norm;
 
-        /* beta controls how aggressively accelerometer/magnetometer pull the estimate back. */
         q_dot1 -= s_beta * s0;
         q_dot2 -= s_beta * s1;
         q_dot3 -= s_beta * s2;
         q_dot4 -= s_beta * s3;
 
-        /* A very small field magnitude is treated as an unhealthy mag reading. */
         s_imu.mag_healthy = (IMU_Pythagorous3(s_imu.mag.x, s_imu.mag.y, s_imu.mag.z) > 0.01f);
     }
+#else
+    /* 6-DOF Implementation (Accel + Gyro only) */
+    if (!((ax == 0.0f) && (ay == 0.0f) && (az == 0.0f))) {
+        recip_norm = IMU_InvSqrt(ax * ax + ay * ay + az * az);
+        ax *= recip_norm;
+        ay *= recip_norm;
+        az *= recip_norm;
+
+        s0 = 4.0f * q0 * q2q2 + 2.0f * q2 * ax + 4.0f * q0 * q1q1 - 2.0f * q1 * ay;
+        s1 = 4.0f * q1 * q3q3 - 2.0f * q3 * ax + 4.0f * q0q0 * q1 - 2.0f * q0 * ay - 4.0f * q1 + 8.0f * q1 * q1q1 + 8.0f * q1 * q2q2 + 4.0f * q1 * az;
+        s2 = 4.0f * q0q0 * q2 + 2.0f * q0 * ax + 4.0f * q2 * q3q3 - 2.0f * q3 * ay - 4.0f * q2 + 8.0f * q2 * q1q1 + 8.0f * q2 * q2q2 + 4.0f * q2 * az;
+        s3 = 4.0f * q1q1 * q3 - 2.0f * q1 * ax + 4.0f * q2q2 * q3 - 2.0f * q2 * ay;
+
+        recip_norm = IMU_InvSqrt(s0 * s0 + s1 * s1 + s2 * s2 + s3 * s3);
+        s0 *= recip_norm;
+        s1 *= recip_norm;
+        s2 *= recip_norm;
+        s3 *= recip_norm;
+
+        q_dot1 -= s_beta * s0;
+        q_dot2 -= s_beta * s1;
+        q_dot3 -= s_beta * s2;
+        q_dot4 -= s_beta * s3;
+
+        s_imu.mag_healthy = 0;
+    }
+#endif
 
     /* Integrate quaternion derivative using the current loop period. */
     q0 += q_dot1 * s_imu.dt_s;
@@ -443,7 +457,7 @@ static void IMU_App_MadgwickUpdate(void)
 }
 
 /* ------------------------------------------------------------------------ */
-/* 6. Quaternion -> Euler                                                    */
+/* 6. Quaternion -> Euler                                                   */
 /* ------------------------------------------------------------------------ */
 
 static void IMU_App_UpdateEuler(void)
@@ -452,13 +466,23 @@ static void IMU_App_UpdateEuler(void)
     float q1 = s_imu.quat.x;
     float q2 = s_imu.quat.y;
     float q3 = s_imu.quat.z;
+    float sinp;
+
+    /* Pitch limit clamping to prevent asinf() returning NaN */
+    sinp = 2.0f * q0 * q2 - 2.0f * q1 * q3;
+    if (sinp > 1.0f) {
+        sinp = 1.0f;
+    } else if (sinp < -1.0f) {
+        sinp = -1.0f;
+    }
 
     /* Export quaternion into user-friendly Euler angles in degrees. */
-    s_imu.pitch_deg = atan2f(2.0f * q2 * q3 + 2.0f * q0 * q1,
-                             -2.0f * q1 * q1 - 2.0f * q2 * q2 + 1.0f) * IMU_RAD2DEG;
-    s_imu.roll_deg = asinf(2.0f * q0 * q2 - 2.0f * q1 * q3) * IMU_RAD2DEG;
-    s_imu.yaw_deg = atan2f(2.0f * q1 * q2 + 2.0f * q0 * q3,
-                           -2.0f * q3 * q3 - 2.0f * q2 * q2 + 1.0f) * IMU_RAD2DEG;
+    s_imu.pitch_deg = asinf(sinp) * IMU_RAD2DEG;
+    s_imu.roll_deg  = atan2f(2.0f * q0 * q1 + 2.0f * q2 * q3,
+                             1.0f - 2.0f * q1 * q1 - 2.0f * q2 * q2) * IMU_RAD2DEG;
+    s_imu.yaw_deg   = atan2f(2.0f * q1 * q2 + 2.0f * q0 * q3,
+                             1.0f - 2.0f * q2 * q2 - 2.0f * q3 * q3) * IMU_RAD2DEG;
+
     if (s_imu.yaw_deg < 0.0f) {
         /* Convert yaw from [-180, 180] style output to [0, 360). */
         s_imu.yaw_deg += 360.0f;
@@ -466,7 +490,7 @@ static void IMU_App_UpdateEuler(void)
 }
 
 /* ------------------------------------------------------------------------ */
-/* 7-9. Public API                                                           */
+/* 7-9. Public API                                                          */
 /* ------------------------------------------------------------------------ */
 
 void IMU_App_Init(void)
@@ -516,6 +540,13 @@ static void IMU_App_Task(void *pvParameters)
     TickType_t last_log_tick = xTaskGetTickCount();
     TickType_t log_period_ticks = pdMS_TO_TICKS(log_period_ms);
 
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    /* Ensure delay is at least 1 tick to prevent continuous polling */
+    TickType_t xFrequency = pdMS_TO_TICKS(1000.0f / IMU_SAMPLE_HZ);
+    if (xFrequency == 0) {
+        xFrequency = 1; 
+    }
+
     while (1) {
         IMU_App_Update();
 
@@ -525,9 +556,8 @@ static void IMU_App_Task(void *pvParameters)
             last_log_tick = xTaskGetTickCount();
         }
 
-        /* Pace the loop close to IMU_SAMPLE_HZ; IMU_App_UpdateDt() still
-         * measures the real elapsed time each cycle and is robust to jitter. */
-        vTaskDelay(pdMS_TO_TICKS(1000.0f / IMU_SAMPLE_HZ));
+        /* Use vTaskDelayUntil to strictly pace the loop timing */
+        vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }
 
