@@ -248,40 +248,7 @@ static void IMU_App_UpdateSensors(void)
 
     /*
      * ------------------------------------------------------------------------
-     * BMX055 Physical Axis Mapping & Math Frame Alignment
-     * ------------------------------------------------------------------------
-     * * [ TOP VIEW ] - X and Y Axis Alignment
-     * * [ True North (Heading = 0 deg) ]
-     * ^
-     * |
-     * (Device Front / Math_X)
-     * * Math_X (Front)   |   Acc_Y (Accel Y-axis)
-     * Mag_X  (Mag X)   |
-     * ^          |        ^
-     * |          |        |
-     * |    [ BMX055 ]     |
-     * (Device Left)  --+----------+--------+-- (Device Right)
-     * |          |
-     * Math_Y (Left) <---           |        ---> Acc_X (Accel X-axis)
-     * Mag_Y  (Mag Y)<---           |             Mag_-Y(Mag inverted Y)
-     * |
-     * v
-     * (Device Rear)
-     *
-     * ------------------------------------------------------------------------
-     * * [ SIDE VIEW ] - Z Axis Alignment
-     * * ^  Math_Z (Up)
-     * |  Acc_Z  (Accel Z-axis)
-     * |  Mag_Z  (Mag Z-axis)
-     * |
-     * ============================+============================ (Horizontal Plane)
-     * [ BMX055 Chip ]      |
-     * ============================+============================
-     * |
-     * |
-     * v  (Earth Gravity, 1g)
-     * * ------------------------------------------------------------------------
-     * * Physical Axis Mapping (from BMX055 Datasheet):
+     * Physical Axis Mapping (from BMX055 Datasheet):
      * ay_chip <->  Bx_chip  (Chip Y-axis Accel corresponds to Chip X-axis Mag)
      * ax_chip <-> -By_chip  (Chip X-axis Accel corresponds to Chip -Y-axis Mag)
      * az_chip <->  Bz_chip  (Chip Z-axis Accel corresponds to Chip Z-axis Mag)
