@@ -17,15 +17,15 @@
 #include "imu_app.h"
 #include "bmx_055.h"
 
-#define IMU_USE_MAGNETOMETER   1
+#define IMU_USE_MAGNETOMETER 1
 
 #define IMU_FILTER_PI 3.14159265358979323846f
 
-#define IMU_SAMPLE_HZ          200.0f
-#define IMU_DEFAULT_DT         (1.0f / IMU_SAMPLE_HZ)
+#define IMU_SAMPLE_HZ 200.0f
+#define IMU_DEFAULT_DT (1.0f / IMU_SAMPLE_HZ)
 
 /* 1 / 16.384 LSB/deg/s for BMX055 initialized to +/- 2000 deg/s range */
-#define GYRO_CALIBRATION_COFF  0.061035f
+#define GYRO_CALIBRATION_COFF 0.061035f
 
 static const char *TAG = "IMU_APP";
 
@@ -37,18 +37,18 @@ static IMU_ButterBuffer s_gyro_buf[3];
 static uint32_t s_last_update_us = 0;
 
 /* --- Calibration Parameters --- */
-static float s_mag_offset_x = -1.50f;
-static float s_mag_offset_y = 1.00f;
-static float s_mag_offset_z = -15.00f; 
+static float s_mag_offset_x = 5.50f;
+static float s_mag_offset_y = 33.00f;
+static float s_mag_offset_z = -5.00f;
 
 static float s_mag_scale_x = 1.00f;
 static float s_mag_scale_y = 1.00f;
-static float s_mag_scale_z = 1.00f;  
+static float s_mag_scale_z = 1.00f;
 /* ------------------------------------------------- */
 /* 6-DOF Madgwick accelerometer correction weight */
-static float s_beta = 0.25f; 
+static float s_beta = 0.1f;
 /* Magnetometer heading correction factor */
-static float s_mag_alpha = 0.20f; 
+static float s_mag_alpha = 0.02f;
 
 /* Forward declaration */
 static void IMU_App_UpdateEuler(void);
@@ -73,11 +73,7 @@ void IMU_FilterSetCutoff(float sample_hz, float cutoff_hz, IMU_ButterParam *para
 
 float IMU_FilterApply(float input, IMU_ButterBuffer *buf, const IMU_ButterParam *param)
 {
-    float output = param->b0 * input
-                 + param->b1 * buf->x1
-                 + param->b2 * buf->x2
-                 - param->a1 * buf->y1
-                 - param->a2 * buf->y2;
+    float output = param->b0 * input + param->b1 * buf->x1 + param->b2 * buf->x2 - param->a1 * buf->y1 - param->a2 * buf->y2;
 
     buf->x2 = buf->x1;
     buf->x1 = input;
@@ -106,10 +102,12 @@ static void IMU_ReadAccelGyro(IMU_Vector3f *gyro, IMU_Vector3f *accel)
     int16_t gx, gy, gz;
     int16_t ax, ay, az;
 
-    if (BMX055_ReadGyroRaw(&gx, &gy, &gz) != ESP_OK) {
+    if (BMX055_ReadGyroRaw(&gx, &gy, &gz) != ESP_OK)
+    {
         gx = gy = gz = 0;
     }
-    if (BMX055_ReadAccelRaw(&ax, &ay, &az) != ESP_OK) {
+    if (BMX055_ReadAccelRaw(&ax, &ay, &az) != ESP_OK)
+    {
         ax = ay = az = 0;
     }
 
@@ -127,7 +125,8 @@ static void IMU_ReadMag(IMU_Vector3f *mag)
 {
     float mx, my, mz;
 
-    if (BMX055_ReadMagCompensated(&mx, &my, &mz) != ESP_OK) {
+    if (BMX055_ReadMagCompensated(&mx, &my, &mz) != ESP_OK)
+    {
         mx = my = mz = 0.0f;
     }
 
@@ -148,7 +147,8 @@ static void IMU_App_CalibrateGyro(void)
     IMU_Vector3f accel_raw;
 
     IMU_DelayMs(200);
-    for (i = 0; i < 200U; i++) {
+    for (i = 0; i < 200U; i++)
+    {
         IMU_ReadAccelGyro(&gyro_raw, &accel_raw);
         gyro_sum.x += gyro_raw.x;
         gyro_sum.y += gyro_raw.y;
@@ -197,15 +197,19 @@ static void IMU_App_UpdateDt(void)
 {
     uint32_t now_us = IMU_Micros();
 
-    if (s_last_update_us == 0U) {
+    if (s_last_update_us == 0U)
+    {
         s_imu.dt_s = IMU_DEFAULT_DT;
-    } else {
+    }
+    else
+    {
         /* Trust the hardware timer exactly. Remove artificial bounds clamping
          * that multiplies integration errors during scheduler jitter. */
         s_imu.dt_s = (float)(now_us - s_last_update_us) / 1000000.0f;
-        
+
         /* Only filter mathematically destructive states. */
-        if (s_imu.dt_s <= 0.0f || isnan(s_imu.dt_s)) {
+        if (s_imu.dt_s <= 0.0f || isnan(s_imu.dt_s))
+        {
             s_imu.dt_s = IMU_DEFAULT_DT;
         }
     }
@@ -242,10 +246,55 @@ static void IMU_App_UpdateSensors(void)
     s_imu.gyro_filtered.y = IMU_FilterApply(s_imu.gyro.y, &s_gyro_buf[1], &s_gyro_param);
     s_imu.gyro_filtered.z = IMU_FilterApply(s_imu.gyro.z, &s_gyro_buf[2], &s_gyro_param);
 
-    /* Map to Math Frame: X(Front), Y(Left), Z(Up) */
-    s_imu.mag_filtered.x = s_imu.mag.y;
-    s_imu.mag_filtered.y = -s_imu.mag.x;
-    s_imu.mag_filtered.z = -s_imu.mag.z;
+    /*
+     * ------------------------------------------------------------------------
+     * BMX055 Physical Axis Mapping & Math Frame Alignment
+     * ------------------------------------------------------------------------
+     * * [ TOP VIEW ] - X and Y Axis Alignment
+     * * [ True North (Heading = 0 deg) ]
+     * ^
+     * |
+     * (Device Front / Math_X)
+     * * Math_X (Front)   |   Acc_Y (Accel Y-axis)
+     * Mag_X  (Mag X)   |
+     * ^          |        ^
+     * |          |        |
+     * |    [ BMX055 ]     |
+     * (Device Left)  --+----------+--------+-- (Device Right)
+     * |          |
+     * Math_Y (Left) <---           |        ---> Acc_X (Accel X-axis)
+     * Mag_Y  (Mag Y)<---           |             Mag_-Y(Mag inverted Y)
+     * |
+     * v
+     * (Device Rear)
+     *
+     * ------------------------------------------------------------------------
+     * * [ SIDE VIEW ] - Z Axis Alignment
+     * * ^  Math_Z (Up)
+     * |  Acc_Z  (Accel Z-axis)
+     * |  Mag_Z  (Mag Z-axis)
+     * |
+     * ============================+============================ (Horizontal Plane)
+     * [ BMX055 Chip ]      |
+     * ============================+============================
+     * |
+     * |
+     * v  (Earth Gravity, 1g)
+     * * ------------------------------------------------------------------------
+     * * Physical Axis Mapping (from BMX055 Datasheet):
+     * ay_chip <->  Bx_chip  (Chip Y-axis Accel corresponds to Chip X-axis Mag)
+     * ax_chip <-> -By_chip  (Chip X-axis Accel corresponds to Chip -Y-axis Mag)
+     * az_chip <->  Bz_chip  (Chip Z-axis Accel corresponds to Chip Z-axis Mag)
+     *
+     * Code Mapping to Math Frame (X: Front, Y: Left, Z: Up):
+     * accel.x (Front) =  ay_chip = Bx_chip  -> mag_filtered.x should be mag.x
+     * accel.y (Left)  = -ax_chip = By_chip  -> mag_filtered.y should be mag.y
+     * accel.z (Up)    =  az_chip = Bz_chip  -> mag_filtered.z should be mag.z
+     * ------------------------------------------------------------------------
+     */
+    s_imu.mag_filtered.x = s_imu.mag.x;
+    s_imu.mag_filtered.y = s_imu.mag.y;
+    s_imu.mag_filtered.z = s_imu.mag.z;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -260,21 +309,22 @@ static void IMU_App_MadgwickUpdate(void)
     float ax = s_imu.accel_filtered.x;
     float ay = s_imu.accel_filtered.y;
     float az = s_imu.accel_filtered.z;
-    
+
     float q0 = s_imu.quat.w, q1 = s_imu.quat.x, q2 = s_imu.quat.y, q3 = s_imu.quat.z;
     float recip_norm;
     float s0, s1, s2, s3;
     float q_dot1, q_dot2, q_dot3, q_dot4;
-    
+
     float q0q0 = q0 * q0, q1q1 = q1 * q1, q2q2 = q2 * q2, q3q3 = q3 * q3;
 
     /* Step 1: Pure 6-DOF Madgwick (isolated from magnetometer) */
     q_dot1 = 0.5f * (-q1 * gx - q2 * gy - q3 * gz);
-    q_dot2 = 0.5f * ( q0 * gx + q2 * gz - q3 * gy);
-    q_dot3 = 0.5f * ( q0 * gy - q1 * gz + q3 * gx);
-    q_dot4 = 0.5f * ( q0 * gz + q1 * gy - q2 * gx);
+    q_dot2 = 0.5f * (q0 * gx + q2 * gz - q3 * gy);
+    q_dot3 = 0.5f * (q0 * gy - q1 * gz + q3 * gx);
+    q_dot4 = 0.5f * (q0 * gz + q1 * gy - q2 * gx);
 
-    if (!((ax == 0.0f) && (ay == 0.0f) && (az == 0.0f))) {
+    if (!((ax == 0.0f) && (ay == 0.0f) && (az == 0.0f)))
+    {
         recip_norm = IMU_InvSqrt(ax * ax + ay * ay + az * az);
         ax *= recip_norm;
         ay *= recip_norm;
@@ -311,7 +361,8 @@ static void IMU_App_MadgwickUpdate(void)
 
 #if IMU_USE_MAGNETOMETER
     /* Step 2: Decoupled Tilt-Compensated Yaw */
-    if (s_imu.mag_healthy) {
+    if (1)
+    {
         /* Extract clean pitch and roll */
         IMU_App_UpdateEuler();
 
@@ -328,15 +379,19 @@ static void IMU_App_MadgwickUpdate(void)
         float Xh = mx * cp + my * sr * sp + mz * cr * sp;
         float Yh = my * cr - mz * sr;
 
-        if (Xh != 0.0f || Yh != 0.0f) {
+        if (Xh != 0.0f || Yh != 0.0f)
+        {
             /* Note -Yh to fix handedness mismatch */
             float mag_yaw = atan2f(-Yh, Xh) * IMU_RAD2DEG;
-            if (mag_yaw < 0.0f) mag_yaw += 360.0f;
+            if (mag_yaw < 0.0f)
+                mag_yaw += 360.0f;
 
             /* Step 3: Find shortest error between gyro heading and mag heading */
             float yaw_err = mag_yaw - s_imu.yaw_deg;
-            if (yaw_err > 180.0f) yaw_err -= 360.0f;
-            if (yaw_err < -180.0f) yaw_err += 360.0f;
+            if (yaw_err > 180.0f)
+                yaw_err -= 360.0f;
+            if (yaw_err < -180.0f)
+                yaw_err += 360.0f;
 
             /* Step 4: Apply smooth correction */
             float correction_rad = (yaw_err * s_mag_alpha) * IMU_DEG2RAD;
@@ -351,7 +406,7 @@ static void IMU_App_MadgwickUpdate(void)
             s_imu.quat.z = cy * qz + sy * qw;
 
             /* Re-normalize */
-            recip_norm = IMU_InvSqrt(s_imu.quat.w*s_imu.quat.w + s_imu.quat.x*s_imu.quat.x + s_imu.quat.y*s_imu.quat.y + s_imu.quat.z*s_imu.quat.z);
+            recip_norm = IMU_InvSqrt(s_imu.quat.w * s_imu.quat.w + s_imu.quat.x * s_imu.quat.x + s_imu.quat.y * s_imu.quat.y + s_imu.quat.z * s_imu.quat.z);
             s_imu.quat.w *= recip_norm;
             s_imu.quat.x *= recip_norm;
             s_imu.quat.y *= recip_norm;
@@ -374,19 +429,25 @@ static void IMU_App_UpdateEuler(void)
     float sinp;
 
     sinp = 2.0f * q0 * q2 - 2.0f * q1 * q3;
-    if (sinp > 1.0f) {
+    if (sinp > 1.0f)
+    {
         sinp = 1.0f;
-    } else if (sinp < -1.0f) {
+    }
+    else if (sinp < -1.0f)
+    {
         sinp = -1.0f;
     }
 
     s_imu.pitch_deg = asinf(sinp) * IMU_RAD2DEG;
-    s_imu.roll_deg  = atan2f(2.0f * q0 * q1 + 2.0f * q2 * q3,
-                             1.0f - 2.0f * q1 * q1 - 2.0f * q2 * q2) * IMU_RAD2DEG;
-    s_imu.yaw_deg   = atan2f(2.0f * q1 * q2 + 2.0f * q0 * q3,
-                             1.0f - 2.0f * q2 * q2 - 2.0f * q3 * q3) * IMU_RAD2DEG;
+    s_imu.roll_deg = atan2f(2.0f * q0 * q1 + 2.0f * q2 * q3,
+                            1.0f - 2.0f * q1 * q1 - 2.0f * q2 * q2) *
+                     IMU_RAD2DEG;
+    s_imu.yaw_deg = atan2f(2.0f * q1 * q2 + 2.0f * q0 * q3,
+                           1.0f - 2.0f * q2 * q2 - 2.0f * q3 * q3) *
+                    IMU_RAD2DEG;
 
-    if (s_imu.yaw_deg < 0.0f) {
+    if (s_imu.yaw_deg < 0.0f)
+    {
         s_imu.yaw_deg += 360.0f;
     }
 }
@@ -425,8 +486,8 @@ const IMU_State *IMU_App_GetState(void)
 }
 
 float IMU_App_GetPitch(void) { return s_imu.pitch_deg; }
-float IMU_App_GetRoll(void)  { return s_imu.roll_deg; }
-float IMU_App_GetYaw(void)   { return s_imu.yaw_deg; }
+float IMU_App_GetRoll(void) { return s_imu.roll_deg; }
+float IMU_App_GetYaw(void) { return s_imu.yaw_deg; }
 
 /* ------------------------------------------------------------------------ */
 /* 11. FreeRTOS task                                                        */
@@ -440,30 +501,34 @@ static void IMU_App_Task(void *pvParameters)
 
     TickType_t xLastWakeTime = xTaskGetTickCount();
     TickType_t xFrequency = pdMS_TO_TICKS(1000.0f / IMU_SAMPLE_HZ);
-    if (xFrequency == 0) xFrequency = 1;
+    if (xFrequency == 0)
+        xFrequency = 1;
 
-    while (1) {
+    while (1)
+    {
         IMU_App_Update();
 
-        if ((xTaskGetTickCount() - last_log_tick) >= log_period_ticks) {
-            
+        if ((xTaskGetTickCount() - last_log_tick) >= log_period_ticks)
+        {
+
             ESP_LOGI(TAG, "Yaw: %8.2f , P: %8.2f, R: %8.2f",
-                     s_imu.yaw_deg, 
-                     s_imu.pitch_deg, 
+                     s_imu.yaw_deg,
+                     s_imu.pitch_deg,
                      s_imu.roll_deg);
             //    ESP_LOGI(TAG, "Pitch: %8.2f deg | Roll: %8.2f deg | Yaw: %8.2f deg",
             //    s_imu.pitch_deg, s_imu.roll_deg, s_imu.yaw_deg);
-            //ESP_LOGI("RAWMAG", "MAG:%f,%f,%f", s_imu.mag.x, s_imu.mag.y, s_imu.mag.z);
+            // ESP_LOGI("RAWMAG", "MAG:%f,%f,%f", s_imu.mag.x, s_imu.mag.y, s_imu.mag.z);
             float mag_heading = atan2f(s_imu.mag.y, s_imu.mag.x) * IMU_RAD2DEG;
-            if (mag_heading < 0.0f) mag_heading += 360.0f;
-            //ESP_LOGI("MAGHDG", "heading=%.1f", mag_heading);
-            //ESP_LOGI("MAGSHAPE", "%.2f,%.2f", s_imu.mag.y, s_imu.mag.z);
-            
+            if (mag_heading < 0.0f)
+                mag_heading += 360.0f;
+            // ESP_LOGI("MAGHDG", "heading=%.1f", mag_heading);
+            // ESP_LOGI("MAGSHAPE", "%.2f,%.2f", s_imu.mag.y, s_imu.mag.z);
+
             /* Data recorded during Z-axis rotation */
-            //ESP_LOGI("MAGCAL_Z", "%.1f,%.1f,%.1f", s_imu.mag.x, s_imu.mag.y, s_imu.mag.z);
+            // ESP_LOGI("MAGCAL_Z", "%.1f,%.1f,%.1f", s_imu.mag.x, s_imu.mag.y, s_imu.mag.z);
 
             /* Data recorded during X-axis rotation */
-            //ESP_LOGI("MAGCAL_X", "%.1f,%.1f,%.1f", s_imu.mag.x, s_imu.mag.y, s_imu.mag.z);
+            // ESP_LOGI("MAGCAL_X", "%.1f,%.1f,%.1f", s_imu.mag.x, s_imu.mag.y, s_imu.mag.z);
             last_log_tick = xTaskGetTickCount();
         }
 

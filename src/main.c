@@ -17,10 +17,9 @@ static const char *TAG = "MAIN";
 void app_main(void)
 {
     ESP_LOGI(TAG, "IMU app init...");
-    IMU_App_Init();              /* I2C + BMX055 bring-up, gyro calibration, initial attitude */
+    IMU_App_Init(); /* I2C + BMX055 bring-up, gyro calibration, initial attitude */
     ESP_LOGI(TAG, "IMU app init complete");
 
     /* Runs IMU_App_Update() at ~200 Hz and logs pitch/roll/yaw every 200 ms. */
-    IMU_App_StartTask(200);
-
+    IMU_App_StartTask(20);
 }
