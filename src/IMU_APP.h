@@ -24,132 +24,150 @@
 #include <stdbool.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-/* ========================================================================
- * Math helpers (formerly imu_math.h)
- * ====================================================================== */
+    /* ========================================================================
+     * Math helpers (formerly imu_math.h)
+     * ====================================================================== */
 
-#define IMU_DEG2RAD  (0.017453292f)   /* PI / 180 */
-#define IMU_RAD2DEG  (57.295780f)     /* 180 / PI */
+#define IMU_DEG2RAD (0.017453292f) /* PI / 180 */
+#define IMU_RAD2DEG (57.295780f)   /* 180 / PI */
 
-/* Fast inverse square-root. A plain 1/sqrtf is used here for correctness
- * and portability; swap in a quake-style approximation later if needed
- * for performance on a constrained MCU. */
-static inline float IMU_InvSqrt(float x)
-{
-    return 1.0f / sqrtf(x);
-}
+    /* Fast inverse square-root. A plain 1/sqrtf is used here for correctness
+     * and portability; swap in a quake-style approximation later if needed
+     * for performance on a constrained MCU. */
+    static inline float IMU_InvSqrt(float x)
+    {
+        long i;
+        float x2, y;
+        const float threehalfs = 1.5F;
 
-/* sqrt(x*x + y*y + z*z), used for magnetometer field-strength health check. */
-static inline float IMU_Pythagorous3(float x, float y, float z)
-{
-    return sqrtf(x * x + y * y + z * z);
-}
+        x2 = x * 0.5F;
+        y = x;
+        i = *(long *)&y;           // evil floating point bit level hacking
+        i = 0x5f3759df - (i >> 1); // what the fuck?
+        y = *(float *)&i;
+        y = y * (threehalfs - (x2 * y * y)); // 1st iteration
+        //	y  = y * ( threehalfs - ( x2 * y * y ) );   // 2nd iteration, this can be removed
 
-/* ========================================================================
- * Basic vector / quaternion types
- * ====================================================================== */
+        return y;
+    }
 
-typedef struct {
-    float x;
-    float y;
-    float z;
-} IMU_Vector3f;
+    /* sqrt(x*x + y*y + z*z), used for magnetometer field-strength health check. */
+    static inline float IMU_Pythagorous3(float x, float y, float z)
+    {
+        return sqrtf(x * x + y * y + z * z);
+    }
 
-typedef struct {
-    float w;
-    float x;
-    float y;
-    float z;
-} IMU_Quaternion;
+    /* ========================================================================
+     * Basic vector / quaternion types
+     * ====================================================================== */
 
-/* ========================================================================
- * Filter types and API (formerly imu_filter.h)
- * Simple 2nd-order Butterworth low-pass, one instance per axis;
- * s_*_param is shared per sensor type, s_*_buf is per-axis.
- * ====================================================================== */
+    typedef struct
+    {
+        float x;
+        float y;
+        float z;
+    } IMU_Vector3f;
 
-typedef struct {
-    float a0, a1, a2;   /* feed-forward (b) and feedback (a) coefficients   */
-    float b0, b1, b2;
-} IMU_ButterParam;
+    typedef struct
+    {
+        float w;
+        float x;
+        float y;
+        float z;
+    } IMU_Quaternion;
 
-typedef struct {
-    float x1, x2;        /* previous two raw inputs  */
-    float y1, y2;        /* previous two filtered outputs */
-} IMU_ButterBuffer;
+    /* ========================================================================
+     * Filter types and API (formerly imu_filter.h)
+     * Simple 2nd-order Butterworth low-pass, one instance per axis;
+     * s_*_param is shared per sensor type, s_*_buf is per-axis.
+     * ====================================================================== */
 
-/* Compute Butterworth biquad coefficients for the given sample rate and
- * cutoff frequency (both in Hz) and store them in *param. */
-void IMU_FilterSetCutoff(float sample_hz, float cutoff_hz, IMU_ButterParam *param);
+    typedef struct
+    {
+        float a0, a1, a2; /* feed-forward (b) and feedback (a) coefficients   */
+        float b0, b1, b2;
+    } IMU_ButterParam;
 
-/* Apply one sample of the filter described by *param, using and updating
- * the per-axis history in *buf. Returns the filtered output sample. */
-float IMU_FilterApply(float input, IMU_ButterBuffer *buf, const IMU_ButterParam *param);
+    typedef struct
+    {
+        float x1, x2; /* previous two raw inputs  */
+        float y1, y2; /* previous two filtered outputs */
+    } IMU_ButterBuffer;
 
-/* ========================================================================
- * Full IMU state snapshot
- * ====================================================================== */
+    /* Compute Butterworth biquad coefficients for the given sample rate and
+     * cutoff frequency (both in Hz) and store them in *param. */
+    void IMU_FilterSetCutoff(float sample_hz, float cutoff_hz, IMU_ButterParam *param);
 
-typedef struct {
-    /* Raw sensor counts (as read from the device, pre-offset) */
-    IMU_Vector3f gyro_raw;
-    IMU_Vector3f accel_raw;
-    IMU_Vector3f mag_raw;
-    float        temperature_deg;
+    /* Apply one sample of the filter described by *param, using and updating
+     * the per-axis history in *buf. Returns the filtered output sample. */
+    float IMU_FilterApply(float input, IMU_ButterBuffer *buf, const IMU_ButterParam *param);
 
-    /* Calibration offsets */
-    IMU_Vector3f gyro_offset;
-    IMU_Vector3f accel_offset;
-    IMU_Vector3f mag_offset;
+    /* ========================================================================
+     * Full IMU state snapshot
+     * ====================================================================== */
 
-    /* Offset-corrected values */
-    IMU_Vector3f gyro;
-    IMU_Vector3f accel;
-    IMU_Vector3f mag;
+    typedef struct
+    {
+        /* Raw sensor counts (as read from the device, pre-offset) */
+        IMU_Vector3f gyro_raw;
+        IMU_Vector3f accel_raw;
+        IMU_Vector3f mag_raw;
+        float temperature_deg;
 
-    /* Low-pass filtered values used by the fusion step */
-    IMU_Vector3f gyro_filtered;
-    IMU_Vector3f accel_filtered;
-    IMU_Vector3f mag_filtered;
+        /* Calibration offsets */
+        IMU_Vector3f gyro_offset;
+        IMU_Vector3f accel_offset;
+        IMU_Vector3f mag_offset;
 
-    bool mag_healthy;
+        /* Offset-corrected values */
+        IMU_Vector3f gyro;
+        IMU_Vector3f accel;
+        IMU_Vector3f mag;
 
-    /* Fusion state */
-    IMU_Quaternion quat;
-    float dt_s;
+        /* Low-pass filtered values used by the fusion step */
+        IMU_Vector3f gyro_filtered;
+        IMU_Vector3f accel_filtered;
+        IMU_Vector3f mag_filtered;
 
-    /* Output Euler angles, degrees */
-    float pitch_deg;
-    float roll_deg;
-    float yaw_deg;
-} IMU_State;
+        bool mag_healthy;
 
-/* ========================================================================
- * Public application API
- * ====================================================================== */
+        /* Fusion state */
+        IMU_Quaternion quat;
+        float dt_s;
 
-/* Bring up I2C, the BMX055 sensors, calibrate gyro bias and build the
- * initial attitude quaternion from accel + mag. Call once at startup. */
-void IMU_App_Init(void);
+        /* Output Euler angles, degrees */
+        float pitch_deg;
+        float roll_deg;
+        float yaw_deg;
+    } IMU_State;
 
-/* Run one full update cycle: timing, sensor read, filtering, AHRS fusion,
- * Euler conversion. Call this periodically (target ~200 Hz / 5 ms). */
-void IMU_App_Update(void);
+    /* ========================================================================
+     * Public application API
+     * ====================================================================== */
 
-/* Return a pointer to the latest full state snapshot (read-only). */
-const IMU_State *IMU_App_GetState(void);
+    /* Bring up I2C, the BMX055 sensors, calibrate gyro bias and build the
+     * initial attitude quaternion from accel + mag. Call once at startup. */
+    void IMU_App_Init(void);
 
-/* Convenience accessors for just the Euler outputs. */
-float IMU_App_GetPitch(void);
-float IMU_App_GetRoll(void);
-float IMU_App_GetYaw(void);
+    /* Run one full update cycle: timing, sensor read, filtering, AHRS fusion,
+     * Euler conversion. Call this periodically (target ~200 Hz / 5 ms). */
+    void IMU_App_Update(void);
 
-/* Start a FreeRTOS task that calls IMU_App_Update() in a loop and logs
- * pitch/roll/yaw at the given interval. Call IMU_App_Init() before this. */
-void IMU_App_StartTask(uint32_t log_period_ms);
+    /* Return a pointer to the latest full state snapshot (read-only). */
+    const IMU_State *IMU_App_GetState(void);
+
+    /* Convenience accessors for just the Euler outputs. */
+    float IMU_App_GetPitch(void);
+    float IMU_App_GetRoll(void);
+    float IMU_App_GetYaw(void);
+
+    /* Start a FreeRTOS task that calls IMU_App_Update() in a loop and logs
+     * pitch/roll/yaw at the given interval. Call IMU_App_Init() before this. */
+    void IMU_App_StartTask(uint32_t log_period_ms);
 
 #ifdef __cplusplus
 }

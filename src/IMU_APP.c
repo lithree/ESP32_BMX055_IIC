@@ -166,7 +166,7 @@ static void IMU_App_CalibrateGyro(void)
 }
 
 /* ------------------------------------------------------------------------ */
-/* 2. Initial attitude from accel (ignoring mag for clean startup)          */
+/* 2. Initial attitude from accel                                           */
 /* ------------------------------------------------------------------------ */
 
 static void IMU_App_ResetAttitude(void)
@@ -207,8 +207,6 @@ static void IMU_App_UpdateDt(void)
     }
     else
     {
-        /* Trust the hardware timer exactly. Remove artificial bounds clamping
-         * that multiplies integration errors during scheduler jitter. */
         s_imu.dt_s = (float)(now_us - s_last_update_us) / 1000000.0f;
 
         /* Only filter mathematically destructive states. */
@@ -288,7 +286,7 @@ static void IMU_App_MadgwickUpdate(void)
 
     float q0q0 = q0 * q0, q1q1 = q1 * q1, q2q2 = q2 * q2, q3q3 = q3 * q3;
 
-    /* Step 1: Pure 6-DOF Madgwick (isolated from magnetometer) */
+    /* Step 1: Pure 6-DOF Madgwick */
     q_dot1 = 0.5f * (-q1 * gx - q2 * gy - q3 * gz);
     q_dot2 = 0.5f * (q0 * gx + q2 * gz - q3 * gy);
     q_dot3 = 0.5f * (q0 * gy - q1 * gz + q3 * gx);
