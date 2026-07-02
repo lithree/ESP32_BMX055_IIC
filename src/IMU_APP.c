@@ -48,7 +48,11 @@ static float s_mag_scale_z = 1.00f;
 /* 6-DOF Madgwick accelerometer correction weight */
 static float s_beta = 0.1f;
 /* Magnetometer heading correction factor */
-static float s_mag_alpha = 0.02f;
+static float s_mag_alpha = 0.005f;
+/* Startup time for mag alpha adjustment */
+static uint32_t s_init_time_us = 0;
+
+float yaw_err_obs = 0;
 
 /* Forward declaration */
 static void IMU_App_UpdateEuler(void);
@@ -330,6 +334,17 @@ static void IMU_App_MadgwickUpdate(void)
     /* Step 2: Decoupled Tilt-Compensated Yaw */
     if (1)
     {
+        /* Adjust mag_alpha based on startup time: 0.2 for first 5 seconds, then 0.005 */
+        uint32_t elapsed_us = IMU_Micros() - s_init_time_us;
+        if (elapsed_us < 5000000U) /* First 5 seconds */
+        {
+            s_mag_alpha = 0.2f;
+        }
+        else
+        {
+            s_mag_alpha = 0.005f;
+        }
+
         /* Extract clean pitch and roll */
         IMU_App_UpdateEuler();
 
@@ -362,6 +377,7 @@ static void IMU_App_MadgwickUpdate(void)
 
             /* Step 4: Apply smooth correction */
             float correction_rad = (yaw_err * s_mag_alpha) * IMU_DEG2RAD;
+            yaw_err_obs = yaw_err;
             float cy = cosf(correction_rad * 0.5f);
             float sy = sinf(correction_rad * 0.5f);
 
@@ -437,6 +453,7 @@ void IMU_App_Init(void)
     IMU_App_CalibrateGyro();
     IMU_App_ResetAttitude();
     s_last_update_us = IMU_Micros();
+    s_init_time_us = IMU_Micros();
 }
 
 void IMU_App_Update(void)
@@ -478,10 +495,11 @@ static void IMU_App_Task(void *pvParameters)
         if ((xTaskGetTickCount() - last_log_tick) >= log_period_ticks)
         {
 
-            ESP_LOGI(TAG, "Yaw: %8.2f , P: %8.2f, R: %8.2f",
+            ESP_LOGI(TAG, "Yaw: %8.2f , P: %8.2f, R: %8.2f, YawErr: %8.2f",
                      s_imu.yaw_deg,
                      s_imu.pitch_deg,
-                     s_imu.roll_deg);
+                     s_imu.roll_deg,
+                     yaw_err_obs);
             //    ESP_LOGI(TAG, "Pitch: %8.2f deg | Roll: %8.2f deg | Yaw: %8.2f deg",
             //    s_imu.pitch_deg, s_imu.roll_deg, s_imu.yaw_deg);
             // ESP_LOGI("RAWMAG", "MAG:%f,%f,%f", s_imu.mag.x, s_imu.mag.y, s_imu.mag.z);
