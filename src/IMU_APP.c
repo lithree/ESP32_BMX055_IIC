@@ -19,6 +19,10 @@
 
 #define IMU_USE_MAGNETOMETER 1
 
+#ifndef IMU_ENABLE_HARD_IRON_CALC
+#define IMU_ENABLE_HARD_IRON_CALC 0
+#endif
+
 #define IMU_FILTER_PI 3.14159265358979323846f
 
 #define IMU_SAMPLE_HZ 200.0f
@@ -36,10 +40,107 @@ static IMU_ButterBuffer s_accel_buf[3];
 static IMU_ButterBuffer s_gyro_buf[3];
 static uint32_t s_last_update_us = 0;
 
+#if IMU_ENABLE_HARD_IRON_CALC
+typedef struct
+{
+    bool active;
+    IMU_Vector3f min;
+    IMU_Vector3f max;
+} IMU_HardIronCalibrator;
+
+static IMU_HardIronCalibrator s_hard_iron_calibrator;
+#endif
+
+static bool IMU_App_HardIronEnabled(void)
+{
+#if IMU_ENABLE_HARD_IRON_CALC
+    return s_hard_iron_calibrator.active;
+#else
+    return false;
+#endif
+}
+
+static void IMU_App_HardIronCalibratorReset(void)
+{
+#if IMU_ENABLE_HARD_IRON_CALC
+    s_hard_iron_calibrator.active = true;
+    s_hard_iron_calibrator.min.x = 0.0f;
+    s_hard_iron_calibrator.min.y = 0.0f;
+    s_hard_iron_calibrator.min.z = 0.0f;
+    s_hard_iron_calibrator.max.x = 0.0f;
+    s_hard_iron_calibrator.max.y = 0.0f;
+    s_hard_iron_calibrator.max.z = 0.0f;
+#else
+    (void)0;
+#endif
+}
+
+static void IMU_App_HardIronCalibratorUpdate(const IMU_Vector3f *mag)
+{
+#if IMU_ENABLE_HARD_IRON_CALC
+    if (!s_hard_iron_calibrator.active)
+    {
+        return;
+    }
+
+    if (s_hard_iron_calibrator.min.x == 0.0f && s_hard_iron_calibrator.min.y == 0.0f && s_hard_iron_calibrator.min.z == 0.0f &&
+        s_hard_iron_calibrator.max.x == 0.0f && s_hard_iron_calibrator.max.y == 0.0f && s_hard_iron_calibrator.max.z == 0.0f)
+    {
+        s_hard_iron_calibrator.min = *mag;
+        s_hard_iron_calibrator.max = *mag;
+    }
+    else
+    {
+        if (mag->x < s_hard_iron_calibrator.min.x)
+            s_hard_iron_calibrator.min.x = mag->x;
+        if (mag->y < s_hard_iron_calibrator.min.y)
+            s_hard_iron_calibrator.min.y = mag->y;
+        if (mag->z < s_hard_iron_calibrator.min.z)
+            s_hard_iron_calibrator.min.z = mag->z;
+
+        if (mag->x > s_hard_iron_calibrator.max.x)
+            s_hard_iron_calibrator.max.x = mag->x;
+        if (mag->y > s_hard_iron_calibrator.max.y)
+            s_hard_iron_calibrator.max.y = mag->y;
+        if (mag->z > s_hard_iron_calibrator.max.z)
+            s_hard_iron_calibrator.max.z = mag->z;
+    }
+#else
+    (void)mag;
+#endif
+}
+
+static float IMU_App_HardIronGetOffsetX(void)
+{
+#if IMU_ENABLE_HARD_IRON_CALC
+    return (s_hard_iron_calibrator.max.x + s_hard_iron_calibrator.min.x) * 0.5f;
+#else
+    return 0.0f;
+#endif
+}
+
+static float IMU_App_HardIronGetOffsetY(void)
+{
+#if IMU_ENABLE_HARD_IRON_CALC
+    return (s_hard_iron_calibrator.max.y + s_hard_iron_calibrator.min.y) * 0.5f;
+#else
+    return 0.0f;
+#endif
+}
+
+static float IMU_App_HardIronGetOffsetZ(void)
+{
+#if IMU_ENABLE_HARD_IRON_CALC
+    return (s_hard_iron_calibrator.max.z + s_hard_iron_calibrator.min.z) * 0.5f;
+#else
+    return 0.0f;
+#endif
+}
+
 /* --- Calibration Parameters --- */
-static float s_mag_offset_x = 5.50f;
-static float s_mag_offset_y = 33.00f;
-static float s_mag_offset_z = -5.00f;
+static float s_mag_offset_x = 5.47f;
+static float s_mag_offset_y = 30.60f;
+static float s_mag_offset_z = -4.71f;
 
 static float s_mag_scale_x = 1.00f;
 static float s_mag_scale_y = 1.00f;
@@ -48,7 +149,7 @@ static float s_mag_scale_z = 1.00f;
 /* 6-DOF Madgwick accelerometer correction weight */
 static float s_beta = 0.1f;
 /* Magnetometer heading correction factor */
-static float s_mag_alpha = 0.005f;
+static float s_mag_alpha = 0.0005f;
 /* Startup time for mag alpha adjustment */
 static uint32_t s_init_time_us = 0;
 
@@ -235,10 +336,15 @@ static void IMU_App_UpdateSensors(void)
     s_imu.accel.y = s_imu.accel_raw.y - s_imu.accel_offset.y;
     s_imu.accel.z = s_imu.accel_raw.z - s_imu.accel_offset.z;
 
+    if (IMU_App_HardIronEnabled())
+    {
+        IMU_App_HardIronCalibratorUpdate(&s_imu.mag_raw);
+    }
+
     /* Apply calibration: (Raw - Offset) * Scale */
-    s_imu.mag.x = (s_imu.mag_raw.x - s_mag_offset_x) * s_mag_scale_x;
-    s_imu.mag.y = (s_imu.mag_raw.y - s_mag_offset_y) * s_mag_scale_y;
-    s_imu.mag.z = (s_imu.mag_raw.z - s_mag_offset_z) * s_mag_scale_z;
+    s_imu.mag.x = (s_imu.mag_raw.x - s_imu.mag_offset.x) * s_mag_scale_x;
+    s_imu.mag.y = (s_imu.mag_raw.y - s_imu.mag_offset.y) * s_mag_scale_y;
+    s_imu.mag.z = (s_imu.mag_raw.z - s_imu.mag_offset.z) * s_mag_scale_z;
 
     s_imu.accel_filtered.x = IMU_FilterApply(s_imu.accel.x, &s_accel_buf[0], &s_accel_param);
     s_imu.accel_filtered.y = IMU_FilterApply(s_imu.accel.y, &s_accel_buf[1], &s_accel_param);
@@ -437,11 +543,32 @@ static void IMU_App_UpdateEuler(void)
 /* Public API                                                               */
 /* ------------------------------------------------------------------------ */
 
+void IMU_App_RunHardIronCalibration(void)
+{
+    if (!IMU_App_HardIronEnabled())
+    {
+        IMU_App_HardIronCalibratorReset();
+        ESP_LOGI(TAG, "Hard-iron calibration started. Rotate the board through all orientations.");
+    }
+
+    IMU_Vector3f mag;
+    IMU_ReadMag(&mag);
+    IMU_App_HardIronCalibratorUpdate(&mag);
+}
+
 void IMU_App_Init(void)
 {
     memset(&s_imu, 0, sizeof(s_imu));
     memset(s_accel_buf, 0, sizeof(s_accel_buf));
     memset(s_gyro_buf, 0, sizeof(s_gyro_buf));
+
+#if IMU_ENABLE_HARD_IRON_CALC
+    IMU_App_HardIronCalibratorReset();
+#endif
+
+    s_imu.mag_offset.x = s_mag_offset_x;
+    s_imu.mag_offset.y = s_mag_offset_y;
+    s_imu.mag_offset.z = s_mag_offset_z;
 
     ESP_ERROR_CHECK(i2c_master_init());
     IMU_FilterSetCutoff(IMU_SAMPLE_HZ, 15.0f, &s_accel_param);
@@ -458,6 +585,9 @@ void IMU_App_Update(void)
 {
     IMU_App_UpdateDt();
     IMU_App_UpdateSensors();
+#if IMU_ENABLE_HARD_IRON_CALC
+    IMU_App_RunHardIronCalibration();
+#endif
     IMU_App_MadgwickUpdate();
     IMU_App_UpdateEuler();
 }
@@ -492,12 +622,21 @@ static void IMU_App_Task(void *pvParameters)
 
         if ((xTaskGetTickCount() - last_log_tick) >= log_period_ticks)
         {
-
-            ESP_LOGI(TAG, "Yaw: %8.2f , P: %8.2f, R: %8.2f, YawErr: %8.2f",
-                     s_imu.yaw_deg,
-                     s_imu.pitch_deg,
-                     s_imu.roll_deg,
-                     yaw_err_obs);
+            if (IMU_App_HardIronEnabled())
+            {
+                ESP_LOGI(TAG, "HardIron: X=%8.2f Y=%8.2f Z=%8.2f",
+                         IMU_App_HardIronGetOffsetX(),
+                         IMU_App_HardIronGetOffsetY(),
+                         IMU_App_HardIronGetOffsetZ());
+            }
+            else
+            {
+                ESP_LOGI(TAG, "Yaw: %8.2f , P: %8.2f, R: %8.2f, YawErr: %8.2f",
+                         s_imu.yaw_deg,
+                         s_imu.pitch_deg,
+                         s_imu.roll_deg,
+                         yaw_err_obs);
+            }
             //    ESP_LOGI(TAG, "Pitch: %8.2f deg | Roll: %8.2f deg | Yaw: %8.2f deg",
             //    s_imu.pitch_deg, s_imu.roll_deg, s_imu.yaw_deg);
             // ESP_LOGI("RAWMAG", "MAG:%f,%f,%f", s_imu.mag.x, s_imu.mag.y, s_imu.mag.z);
