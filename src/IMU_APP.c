@@ -631,11 +631,11 @@ static void IMU_App_Task(void *pvParameters)
             }
             else
             {
-                ESP_LOGI(TAG, "Yaw: %8.2f , P: %8.2f, R: %8.2f, YawErr: %8.2f",
-                         s_imu.yaw_deg,
-                         s_imu.pitch_deg,
-                         s_imu.roll_deg,
-                         yaw_err_obs);
+                // ESP_LOGI(TAG, "Yaw: %8.2f , P: %8.2f, R: %8.2f, YawErr: %8.2f",
+                //          s_imu.yaw_deg,
+                //          s_imu.pitch_deg,
+                //          s_imu.roll_deg,
+                //          yaw_err_obs);
             }
             //    ESP_LOGI(TAG, "Pitch: %8.2f deg | Roll: %8.2f deg | Yaw: %8.2f deg",
             //    s_imu.pitch_deg, s_imu.roll_deg, s_imu.yaw_deg);
