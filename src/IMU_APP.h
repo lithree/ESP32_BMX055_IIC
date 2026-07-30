@@ -29,15 +29,13 @@ extern "C"
 #endif
 
     /* ========================================================================
-     * Math helpers (formerly imu_math.h)
+     * Math helpers
      * ====================================================================== */
 
 #define IMU_DEG2RAD (0.017453292f) /* PI / 180 */
 #define IMU_RAD2DEG (57.295780f)   /* 180 / PI */
 
-    /* Fast inverse square-root. A plain 1/sqrtf is used here for correctness
-     * and portability; swap in a quake-style approximation later if needed
-     * for performance on a constrained MCU. */
+    /* Fast inverse square-root. */
     static inline float IMU_InvSqrt(float x)
     {
         long i;

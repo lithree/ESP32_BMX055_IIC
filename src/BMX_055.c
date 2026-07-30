@@ -14,8 +14,8 @@
 
 #include "bmx_055.h"
 
-#define I2C_MASTER_SCL_IO 13
-#define I2C_MASTER_SDA_IO 14
+#define I2C_MASTER_SCL_IO 39
+#define I2C_MASTER_SDA_IO 38
 #define I2C_MASTER_NUM I2C_NUM_0
 #define I2C_MASTER_FREQ_HZ 100000
 #define I2C_MASTER_TX_BUF_DISABLE 0
@@ -31,22 +31,22 @@
 #define BMX055_ADDR_MAG 0x10
 
 #define RANGE_PMU_ACC 0x0f
-#define PMU_BW_ACC    0x10
-#define PMU_LPW_ACC   0x11
+#define PMU_BW_ACC 0x10
+#define PMU_LPW_ACC 0x11
 
-#define RANGE_GYRO        0x0F
-#define BW_GYRO              0x10
-#define LPM1_GYRO            0x11
+#define RANGE_GYRO 0x0F
+#define BW_GYRO 0x10
+#define LPM1_GYRO 0x11
 
-#define POWER_CTRL_MAG       0x4B
-#define OP_MODE_MAG          0x4C
+#define POWER_CTRL_MAG 0x4B
+#define OP_MODE_MAG 0x4C
 
-#define BMX055_D_X_LSB_ACC   0x02
-#define BMX055_RATE_X_LSB_GYRO      0x02
-#define DATA_X_LSB_MAG       0x42
+#define BMX055_D_X_LSB_ACC 0x02
+#define BMX055_RATE_X_LSB_GYRO 0x02
+#define DATA_X_LSB_MAG 0x42
 
 #define BMX055_MAG_OVERFLOW_ADCVAL_XYAXES_FLIP -4096
-#define BMX055_MAG_OVERFLOW_ADCVAL_ZAXIS_HALL  -16384
+#define BMX055_MAG_OVERFLOW_ADCVAL_ZAXIS_HALL -16384
 
 static const char *TAG = "BMX055_IIC";
 
@@ -67,7 +67,8 @@ esp_err_t i2c_master_init(void)
     return i2c_driver_install(i2c_master_port, conf.mode, I2C_MASTER_RX_BUF_DISABLE, I2C_MASTER_TX_BUF_DISABLE, 0);
 }
 
-esp_err_t bmx055_write_register(uint8_t device_address, uint8_t reg_addr, uint8_t data) {
+esp_err_t bmx055_write_register(uint8_t device_address, uint8_t reg_addr, uint8_t data)
+{
     uint8_t write_buf[2] = {reg_addr, data};
     return i2c_master_write_to_device(I2C_MASTER_NUM, device_address, write_buf, sizeof(write_buf), I2C_MASTER_TIMEOUT_MS / portTICK_PERIOD_MS);
 }
@@ -104,7 +105,8 @@ esp_err_t BMX055_ReadAccelRaw(int16_t *x, int16_t *y, int16_t *z)
 {
     uint8_t data[6];
     esp_err_t err = bmx055_read_registers(BMX055_ADDR_ACC, BMX055_D_X_LSB_ACC, data, 6);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         return err;
     }
 
@@ -119,7 +121,8 @@ esp_err_t BMX055_ReadGyroRaw(int16_t *x, int16_t *y, int16_t *z)
 {
     uint8_t data[6];
     esp_err_t err = bmx055_read_registers(BMX055_ADDR_GYRO, BMX055_RATE_X_LSB_GYRO, data, 6);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         return err;
     }
 
@@ -134,7 +137,8 @@ esp_err_t BMX055_ReadMagRaw(int16_t *x, int16_t *y, int16_t *z)
 {
     uint8_t data[6];
     esp_err_t err = bmx055_read_registers(BMX055_ADDR_MAG, DATA_X_LSB_MAG, data, 6);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         return err;
     }
 
@@ -154,7 +158,8 @@ static float compensate_x(int16_t mag_data_x, uint16_t data_rhall, const struct 
     float retval = 0;
     float process_comp_x0, process_comp_x1, process_comp_x2, process_comp_x3, process_comp_x4;
 
-    if ((mag_data_x != BMX055_MAG_OVERFLOW_ADCVAL_XYAXES_FLIP) && (data_rhall != 0) && (trim_data->dig_xyz1 != 0)) {
+    if ((mag_data_x != BMX055_MAG_OVERFLOW_ADCVAL_XYAXES_FLIP) && (data_rhall != 0) && (trim_data->dig_xyz1 != 0))
+    {
         process_comp_x0 = (((float)trim_data->dig_xyz1) * 16384.0f / data_rhall);
         retval = (process_comp_x0 - 16384.0f);
         process_comp_x1 = ((float)trim_data->dig_xy2) * (retval * retval / 268435456.0f);
@@ -171,7 +176,8 @@ static float compensate_y(int16_t mag_data_y, uint16_t data_rhall, const struct 
     float retval = 0;
     float process_comp_y0, process_comp_y1, process_comp_y2, process_comp_y3, process_comp_y4;
 
-    if ((mag_data_y != BMX055_MAG_OVERFLOW_ADCVAL_XYAXES_FLIP) && (data_rhall != 0) && (trim_data->dig_xyz1 != 0)) {
+    if ((mag_data_y != BMX055_MAG_OVERFLOW_ADCVAL_XYAXES_FLIP) && (data_rhall != 0) && (trim_data->dig_xyz1 != 0))
+    {
         process_comp_y0 = ((float)trim_data->dig_xyz1) * 16384.0f / data_rhall;
         retval = process_comp_y0 - 16384.0f;
         process_comp_y1 = ((float)trim_data->dig_xy2) * (retval * retval / 268435456.0f);
@@ -188,7 +194,8 @@ static float compensate_z(int16_t mag_data_z, uint16_t data_rhall, const struct 
     float retval = 0;
     float process_comp_z0, process_comp_z1, process_comp_z2, process_comp_z3, process_comp_z4, process_comp_z5;
 
-    if ((mag_data_z != BMX055_MAG_OVERFLOW_ADCVAL_ZAXIS_HALL) && (trim_data->dig_z2 != 0) && (trim_data->dig_z1 != 0) && (trim_data->dig_xyz1 != 0) && (data_rhall != 0)) {
+    if ((mag_data_z != BMX055_MAG_OVERFLOW_ADCVAL_ZAXIS_HALL) && (trim_data->dig_z2 != 0) && (trim_data->dig_z1 != 0) && (trim_data->dig_xyz1 != 0) && (data_rhall != 0))
+    {
         process_comp_z0 = ((float)mag_data_z) - ((float)trim_data->dig_z4);
         process_comp_z1 = ((float)data_rhall) - ((float)trim_data->dig_xyz1);
         process_comp_z2 = (((float)trim_data->dig_z3) * process_comp_z1);
@@ -203,22 +210,25 @@ static float compensate_z(int16_t mag_data_z, uint16_t data_rhall, const struct 
 static void bmx055_read_mag_trim_data(void)
 {
     uint8_t trim_buf[21] = {0};
-    
-    if (bmx055_read_registers(BMX055_ADDR_MAG, 0x5D, trim_buf, 21) == ESP_OK) {
-        mag_trim_data.dig_x1   = (int8_t)trim_buf[0];
-        mag_trim_data.dig_y1   = (int8_t)trim_buf[1];
-        mag_trim_data.dig_x2   = (int8_t)trim_buf[7];
-        mag_trim_data.dig_y2   = (int8_t)trim_buf[8];
-        mag_trim_data.dig_z1   = (uint16_t)((trim_buf[14] << 8) | trim_buf[13]);
-        mag_trim_data.dig_z2   = (int16_t)((trim_buf[12] << 8) | trim_buf[11]);
-        mag_trim_data.dig_z3   = (int16_t)((trim_buf[18] << 8) | trim_buf[17]);
-        mag_trim_data.dig_z4   = (int16_t)((trim_buf[6] << 8) | trim_buf[5]);
-        mag_trim_data.dig_xy1  = (uint8_t)trim_buf[20];
-        mag_trim_data.dig_xy2  = (int8_t)trim_buf[19];
+
+    if (bmx055_read_registers(BMX055_ADDR_MAG, 0x5D, trim_buf, 21) == ESP_OK)
+    {
+        mag_trim_data.dig_x1 = (int8_t)trim_buf[0];
+        mag_trim_data.dig_y1 = (int8_t)trim_buf[1];
+        mag_trim_data.dig_x2 = (int8_t)trim_buf[7];
+        mag_trim_data.dig_y2 = (int8_t)trim_buf[8];
+        mag_trim_data.dig_z1 = (uint16_t)((trim_buf[14] << 8) | trim_buf[13]);
+        mag_trim_data.dig_z2 = (int16_t)((trim_buf[12] << 8) | trim_buf[11]);
+        mag_trim_data.dig_z3 = (int16_t)((trim_buf[18] << 8) | trim_buf[17]);
+        mag_trim_data.dig_z4 = (int16_t)((trim_buf[6] << 8) | trim_buf[5]);
+        mag_trim_data.dig_xy1 = (uint8_t)trim_buf[20];
+        mag_trim_data.dig_xy2 = (int8_t)trim_buf[19];
         mag_trim_data.dig_xyz1 = (uint16_t)((trim_buf[16] << 8) | trim_buf[15]);
-        
+
         ESP_LOGI(TAG, "MAG trim data loaded successfully");
-    } else {
+    }
+    else
+    {
         ESP_LOGE(TAG, "Failed to read MAG trim data");
     }
 }
@@ -228,7 +238,8 @@ esp_err_t BMX055_ReadMagCompensated(float *x, float *y, float *z)
     uint8_t data[8];
     /* Read DATA_X_LSB (0x42) through RHALL_MSB (0x49) */
     esp_err_t err = bmx055_read_registers(BMX055_ADDR_MAG, DATA_X_LSB_MAG, data, 8);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         return err;
     }
 
@@ -292,11 +303,11 @@ void bmx055_init(void)
     // NORMAL mode
     bmx055_write_register(BMX055_ADDR_GYRO, LPM1_GYRO, 0x00);
 
-    //MAG
-    // Pwr Ctrl -> 1 (suspend mode to sleep mode)
+    // MAG
+    //  Pwr Ctrl -> 1 (suspend mode to sleep mode)
     bmx055_write_register(BMX055_ADDR_MAG, POWER_CTRL_MAG, 0x01);
     vTaskDelay(pdMS_TO_TICKS(10));
-    
+
     // Read trim registers while magnetometer is in sleep mode
     bmx055_read_mag_trim_data();
 
@@ -307,18 +318,23 @@ void bmx055_init(void)
     vTaskDelay(pdMS_TO_TICKS(50));
 }
 
-void bmx055_accel_read_task(void *pvParameters) {
+void bmx055_accel_read_task(void *pvParameters)
+{
     int16_t x, y, z;
     float x_g, y_g, z_g;
 
-    while (1) {
-        if (BMX055_ReadAccelRaw(&x, &y, &z) == ESP_OK) {
+    while (1)
+    {
+        if (BMX055_ReadAccelRaw(&x, &y, &z) == ESP_OK)
+        {
             x_g = (float)x * 0.0009765625f;
             y_g = (float)y * 0.0009765625f;
             z_g = (float)z * 0.0009765625f;
 
             ESP_LOGI(TAG, "X: %8.3f g  |  Y: %8.3f g  |  Z: %8.3f g", x_g, y_g, z_g);
-        } else {
+        }
+        else
+        {
             ESP_LOGE(TAG, "ACCEL Read Error");
         }
 
@@ -326,18 +342,23 @@ void bmx055_accel_read_task(void *pvParameters) {
     }
 }
 
-void bmx055_gyro_read_task(void *pvParameters) {
+void bmx055_gyro_read_task(void *pvParameters)
+{
     int16_t x, y, z;
     float x_dps, y_dps, z_dps;
 
-    while (1) {
-        if (BMX055_ReadGyroRaw(&x, &y, &z) == ESP_OK) {
+    while (1)
+    {
+        if (BMX055_ReadGyroRaw(&x, &y, &z) == ESP_OK)
+        {
             x_dps = (float)x * 0.0609756f;
             y_dps = (float)y * 0.0609756f;
             z_dps = (float)z * 0.0609756f;
 
             ESP_LOGI(TAG, "X: %8.3f dps | Y: %8.3f dps | Z: %8.3f dps", x_dps, y_dps, z_dps);
-        } else {
+        }
+        else
+        {
             ESP_LOGE(TAG, "GYRO Read ERROR");
         }
 
@@ -345,13 +366,18 @@ void bmx055_gyro_read_task(void *pvParameters) {
     }
 }
 
-void bmx055_mag_read_task(void *pvParameters) {
+void bmx055_mag_read_task(void *pvParameters)
+{
     float x_ut, y_ut, z_ut;
 
-    while (1) {
-        if (BMX055_ReadMagCompensated(&x_ut, &y_ut, &z_ut) == ESP_OK) {
+    while (1)
+    {
+        if (BMX055_ReadMagCompensated(&x_ut, &y_ut, &z_ut) == ESP_OK)
+        {
             ESP_LOGI(TAG, "X: %8.2f uT | Y: %8.2f uT | Z: %8.2f uT", x_ut, y_ut, z_ut);
-        } else {
+        }
+        else
+        {
             ESP_LOGE(TAG, "MAG Read Error");
         }
 
