@@ -233,20 +233,47 @@ static void bmx055_read_mag_trim_data(void)
     }
 }
 
+static void bmx055_mag_recover(void)
+{
+    ESP_LOGW(TAG, "BMM150 recovery triggered: resetting I2C driver and waking chip");
+    /* Reset I2C driver state to clear bus errors */
+    i2c_driver_delete(I2C_MASTER_NUM);
+    i2c_master_init();
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    /* Wake up from suspend mode to sleep mode */
+    bmx055_write_register(BMX055_ADDR_MAG, POWER_CTRL_MAG, 0x01);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    /* Re-configure normal mode with 30Hz ODR */
+    bmx055_write_register(BMX055_ADDR_MAG, OP_MODE_MAG, 0x38);
+    vTaskDelay(pdMS_TO_TICKS(10));
+}
+
 esp_err_t BMX055_ReadMagCompensated(float *x, float *y, float *z)
 {
+    static uint8_t s_consecutive_errors = 0;
     uint8_t data[8];
     /* Read DATA_X_LSB (0x42) through RHALL_MSB (0x49) */
     esp_err_t err = bmx055_read_registers(BMX055_ADDR_MAG, DATA_X_LSB_MAG, data, 8);
-    if (err != ESP_OK)
+    uint16_t rhall = ((uint16_t)((data[7] << 8) | data[6])) >> 2;
+
+    /* Treat I2C failure OR zero rhall (sensor in suspend/sleep/corrupted) as error */
+    if (err != ESP_OK || rhall == 0)
     {
-        return err;
+        s_consecutive_errors++;
+        if (s_consecutive_errors >= 5)
+        {
+            bmx055_mag_recover();
+            s_consecutive_errors = 0;
+        }
+        return (err != ESP_OK) ? err : ESP_FAIL;
     }
+    s_consecutive_errors = 0;
 
     int16_t raw_x = (int16_t)((data[1] << 8) | data[0]) >> 3;
     int16_t raw_y = (int16_t)((data[3] << 8) | data[2]) >> 3;
     int16_t raw_z = (int16_t)((data[5] << 8) | data[4]) >> 1;
-    uint16_t rhall = ((uint16_t)((data[7] << 8) | data[6])) >> 2;
 
     *x = compensate_x(raw_x, rhall, &mag_trim_data);
     *y = compensate_y(raw_y, rhall, &mag_trim_data);
@@ -279,6 +306,11 @@ void bmx055_init(void)
     {
         ESP_LOGE(TAG, "Gyro ID read fail");
     }
+
+    // MAG: Power up from suspend mode to sleep mode first
+    bmx055_write_register(BMX055_ADDR_MAG, POWER_CTRL_MAG, 0x01);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
     if (bmx055_read_register(BMX055_ADDR_MAG, I2C_CHIPID_REG_MAG, &mag_id) == ESP_OK)
     {
         ESP_LOGI(TAG, "Magno Chip ID: 0x%02X", mag_id);
@@ -287,6 +319,7 @@ void bmx055_init(void)
     {
         ESP_LOGE(TAG, "Magno ID read fail");
     }
+
     // Accel
     // +/- 2g
     bmx055_write_register(BMX055_ADDR_ACC, RANGE_PMU_ACC, 0x03);
@@ -303,15 +336,10 @@ void bmx055_init(void)
     // NORMAL mode
     bmx055_write_register(BMX055_ADDR_GYRO, LPM1_GYRO, 0x00);
 
-    // MAG
-    //  Pwr Ctrl -> 1 (suspend mode to sleep mode)
-    bmx055_write_register(BMX055_ADDR_MAG, POWER_CTRL_MAG, 0x01);
-    vTaskDelay(pdMS_TO_TICKS(10));
-
-    // Read trim registers while magnetometer is in sleep mode
+    // MAG: Read trim registers while magnetometer is in sleep mode
     bmx055_read_mag_trim_data();
 
-    // Normal Mode
+    // MAG: Switch to Normal Mode (30Hz ODR)
     bmx055_write_register(BMX055_ADDR_MAG, OP_MODE_MAG, 0x38);
     vTaskDelay(pdMS_TO_TICKS(10));
 

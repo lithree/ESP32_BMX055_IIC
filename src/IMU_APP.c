@@ -138,9 +138,9 @@ static float IMU_App_HardIronGetOffsetZ(void)
 }
 
 /* --- Calibration Parameters --- */
-static float s_mag_offset_x = 5.47f;
-static float s_mag_offset_y = 30.60f;
-static float s_mag_offset_z = -4.71f;
+static float s_mag_offset_x = 3.8f;
+static float s_mag_offset_y = -90.60f;
+static float s_mag_offset_z = -35.71f;
 
 static float s_mag_scale_x = 1.00f;
 static float s_mag_scale_y = 1.00f;
@@ -569,14 +569,18 @@ void IMU_App_Init(void)
     s_imu.mag_offset.x = s_mag_offset_x;
     s_imu.mag_offset.y = s_mag_offset_y;
     s_imu.mag_offset.z = s_mag_offset_z;
-
+    vTaskDelay(pdMS_TO_TICKS(10));
     ESP_ERROR_CHECK(i2c_master_init());
+    vTaskDelay(pdMS_TO_TICKS(10));
     IMU_FilterSetCutoff(IMU_SAMPLE_HZ, 15.0f, &s_accel_param);
     IMU_FilterSetCutoff(IMU_SAMPLE_HZ, 50.0f, &s_gyro_param);
-
+    vTaskDelay(pdMS_TO_TICKS(10));
     bmx055_init();
+    vTaskDelay(pdMS_TO_TICKS(10));
     IMU_App_CalibrateGyro();
+    vTaskDelay(pdMS_TO_TICKS(10));
     IMU_App_ResetAttitude();
+    vTaskDelay(pdMS_TO_TICKS(10));
     s_last_update_us = IMU_Micros();
     s_init_time_us = IMU_Micros();
 }
